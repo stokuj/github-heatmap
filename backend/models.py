@@ -1,6 +1,7 @@
 from datetime import date
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import DateTime
 from sqlalchemy import Date
@@ -21,7 +22,13 @@ class GitHubProfile(Base):
     __tablename__ = "github_profiles"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    github_user_id: Mapped[str | None] = mapped_column(
+        String(30), unique=True, nullable=True
+    )
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    public_id: Mapped[str] = mapped_column(
+        String(36), unique=True, nullable=False, default=lambda: str(uuid4())
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

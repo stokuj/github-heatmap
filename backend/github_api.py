@@ -1,8 +1,61 @@
 from collections.abc import Mapping
 from datetime import date
 from datetime import timedelta
+from typing import Any
 
 import httpx
+
+
+def exchange_code_for_access_token(
+    code: str,
+    client_id: str,
+    client_secret: str,
+) -> str:
+    response = httpx.post(
+        "https://github.com/login/oauth/access_token",
+        headers={"Accept": "application/json", "User-Agent": "github-heatmap-demo"},
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+        },
+        timeout=15.0,
+    )
+    response.raise_for_status()
+
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise ValueError("GitHub OAuth response is invalid")
+
+    access_token = payload.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise ValueError("GitHub OAuth access token is missing")
+
+    return access_token
+
+
+def fetch_authenticated_user(token: str) -> dict[str, str | int]:
+    response = httpx.get(
+        "https://api.github.com/user",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "github-heatmap-demo",
+        },
+        timeout=15.0,
+    )
+    response.raise_for_status()
+
+    payload: Any = response.json()
+    if not isinstance(payload, Mapping):
+        raise ValueError("GitHub user response is invalid")
+
+    raw_id = payload.get("id")
+    raw_login = payload.get("login")
+    if not isinstance(raw_id, int) or not isinstance(raw_login, str) or not raw_login:
+        raise ValueError("GitHub user response is missing required fields")
+
+    return {"id": raw_id, "login": raw_login}
 
 
 def fetch_contribution_days(

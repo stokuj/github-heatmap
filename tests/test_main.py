@@ -234,6 +234,86 @@ def test_get_calendar_heatmap_rejects_invalid_date_range(db_client: TestClient) 
     assert response.json() == {"detail": "from must be before or equal to to"}
 
 
+def test_get_heatmap_me_requires_bearer_token(db_client: TestClient) -> None:
+    response = db_client.get("/heatmap/me")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authorization Bearer token is required"}
+
+
+def test_get_heatmap_me_rejects_non_bearer_authorization(db_client: TestClient) -> None:
+    response = db_client.get("/heatmap/me", headers={"Authorization": "token abc"})
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authorization Bearer token is required"}
+
+
+def test_get_heatmap_me_returns_weeks_for_authenticated_user(
+    monkeypatch: pytest.MonkeyPatch, db_client: TestClient
+) -> None:
+    def fake_fetch_authenticated_user(token: str) -> dict[str, str | int]:
+        assert token == "oauth-token"
+        return {"id": 1, "login": "OctoCat"}
+
+    def fake_fetch_contribution_days(
+        username: str,
+        token: str,
+        graphql_url: str,
+    ):
+        assert username == "octocat"
+        assert token == "oauth-token"
+        assert graphql_url == "https://api.github.com/graphql"
+        return [
+            {"date": "2026-02-15", "count": 0},
+            {"date": "2026-02-16", "count": 2},
+            {"date": "2026-02-17", "count": 10},
+        ]
+
+    monkeypatch.setattr(
+        "backend.main.fetch_authenticated_user",
+        fake_fetch_authenticated_user,
+    )
+    monkeypatch.setattr(
+        "backend.main.fetch_contribution_days",
+        fake_fetch_contribution_days,
+    )
+
+    response = db_client.get(
+        "/heatmap/me",
+        headers={"Authorization": "Bearer oauth-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "username": "octocat",
+        "total": 12,
+        "weeks": [
+            {
+                "week_start": "2026-02-15",
+                "days": [
+                    {"date": "2026-02-15", "weekday": 0, "count": 0, "level": 0},
+                    {"date": "2026-02-16", "weekday": 1, "count": 2, "level": 1},
+                    {"date": "2026-02-17", "weekday": 2, "count": 10, "level": 4},
+                ],
+            }
+        ],
+    }
+
+
+def test_openapi_exposes_bearer_auth_for_heatmap_me() -> None:
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    payload = response.json()
+    security_schemes = payload["components"]["securitySchemes"]
+    assert security_schemes["HTTPBearer"] == {
+        "type": "http",
+        "scheme": "bearer",
+    }
+    operation = payload["paths"]["/heatmap/me"]["get"]
+    assert operation["security"] == [{"HTTPBearer": []}]
+
+
 def test_get_calendar_grid_returns_github_style_weeks(db_client: TestClient) -> None:
     db_client.post("/profiles", json={"username": "octocat"})
     db_client.post("/profiles/octocat/days", json={"day": "2026-02-19", "count": 2})
@@ -319,3 +399,82 @@ def test_demo_endpoint_returns_html() -> None:
     assert response.headers["content-type"].startswith("text/html")
     assert "GitHub Heatmap Demo" in response.text
     assert "/heatmap/${username}/calendar-grid" in response.text
+
+
+def test_auth_callback_creates_profile_and_returns_stable_public_links(
+    monkeypatch: pytest.MonkeyPatch, db_client: TestClient
+) -> None:
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("APP_BASE_URL", "http://127.0.0.1:8000")
+
+    def fake_exchange_code_for_access_token(
+        code: str,
+        client_id: str,
+        client_secret: str,
+    ) -> str:
+        assert code == "oauth-code"
+        assert client_id == "client-id"
+        assert client_secret == "client-secret"
+        return "oauth-token"
+
+    def fake_fetch_authenticated_user(token: str) -> dict[str, str | int]:
+        assert token == "oauth-token"
+        return {"id": 1234, "login": "stokuj"}
+
+    monkeypatch.setattr(
+        "backend.main.exchange_code_for_access_token",
+        fake_exchange_code_for_access_token,
+    )
+    monkeypatch.setattr(
+        "backend.main.fetch_authenticated_user",
+        fake_fetch_authenticated_user,
+    )
+
+    first = db_client.get("/auth/github/callback?code=oauth-code")
+    second = db_client.get("/auth/github/callback?code=oauth-code")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+
+    first_payload = first.json()
+    second_payload = second.json()
+
+    assert first_payload["username"] == "stokuj"
+    assert first_payload["panel_url"].startswith("http://127.0.0.1:8000/public/")
+    assert first_payload["json_url"].endswith("/heatmap.json")
+    assert first_payload["panel_url"] == second_payload["panel_url"]
+    assert first_payload["json_url"] == second_payload["json_url"]
+
+
+def test_public_heatmap_json_endpoint_returns_profile_data(
+    monkeypatch: pytest.MonkeyPatch, db_client: TestClient
+) -> None:
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "client-id")
+    monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("APP_BASE_URL", "http://127.0.0.1:8000")
+
+    monkeypatch.setattr(
+        "backend.main.exchange_code_for_access_token",
+        lambda code, client_id, client_secret: "oauth-token",
+    )
+    monkeypatch.setattr(
+        "backend.main.fetch_authenticated_user",
+        lambda token: {"id": 1234, "login": "stokuj"},
+    )
+
+    callback_response = db_client.get("/auth/github/callback?code=oauth-code")
+    panel_url = callback_response.json()["panel_url"]
+    json_url = callback_response.json()["json_url"]
+
+    db_client.post("/profiles/stokuj/days", json={"day": "2026-02-20", "count": 4})
+
+    public_panel = db_client.get(panel_url.replace("http://127.0.0.1:8000", ""))
+    public_json = db_client.get(json_url.replace("http://127.0.0.1:8000", ""))
+
+    assert public_panel.status_code == 200
+    assert "Public Heatmap" in public_panel.text
+    assert public_json.status_code == 200
+    payload = public_json.json()
+    assert payload["username"] == "stokuj"
+    assert payload["weeks"]

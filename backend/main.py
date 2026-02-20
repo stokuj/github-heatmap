@@ -3,14 +3,21 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import UTC
 import json
+from urllib.parse import urlencode
+from uuid import uuid4
 
 from fastapi import Depends
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import Security
+from fastapi.responses import HTMLResponse
+from fastapi.responses import RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPBearer
+import httpx
 from pydantic import BaseModel
 from pydantic import Field
-from fastapi.responses import HTMLResponse
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import select
@@ -19,6 +26,8 @@ from sqlalchemy.orm import Session
 
 from backend.db import engine
 from backend.db import get_db
+from backend.github_api import exchange_code_for_access_token
+from backend.github_api import fetch_authenticated_user
 from backend.github_api import fetch_contribution_days
 from backend.models import GitHubProfile
 from backend.models import HeatmapDay
@@ -26,6 +35,7 @@ from backend.models import SyncRun
 from backend.settings import Settings
 
 app = FastAPI()
+bearer_scheme = HTTPBearer(auto_error=False)
 
 WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 HEATMAP_LEVELS = [
@@ -44,6 +54,35 @@ class ProfileCreate(BaseModel):
 class HeatmapDayCreate(BaseModel):
     day: date
     count: int = Field(ge=0)
+
+
+def get_profile_by_username(db: Session, username: str) -> GitHubProfile | None:
+    return db.scalar(
+        select(GitHubProfile).where(GitHubProfile.username == username.lower())
+    )
+
+
+def get_profile_by_public_id(db: Session, public_id: str) -> GitHubProfile | None:
+    return db.scalar(select(GitHubProfile).where(GitHubProfile.public_id == public_id))
+
+
+def resolve_date_range(
+    from_date: date | None,
+    to_date: date | None,
+) -> tuple[date, date]:
+    if from_date is None and to_date is None:
+        resolved_to = date.today()
+        resolved_from = resolved_to - timedelta(days=364)
+        return resolved_from, resolved_to
+    if from_date is None or to_date is None:
+        raise HTTPException(
+            status_code=400, detail="from and to must be provided together"
+        )
+    if from_date > to_date:
+        raise HTTPException(
+            status_code=400, detail="from must be before or equal to to"
+        )
+    return from_date, to_date
 
 
 def rebuild_heatmap_days_for_profile(
@@ -79,6 +118,96 @@ def rebuild_heatmap_days_for_profile(
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
+@app.get("/auth/github/login", response_class=RedirectResponse)
+def github_login() -> RedirectResponse:
+    settings = Settings()
+    if not settings.github_oauth_client_id:
+        raise HTTPException(status_code=500, detail="GITHUB_OAUTH_CLIENT_ID is not set")
+
+    callback_url = f"{settings.app_base_url.rstrip('/')}/auth/github/callback"
+    query = urlencode(
+        {
+            "client_id": settings.github_oauth_client_id,
+            "redirect_uri": callback_url,
+            "scope": "read:user",
+        }
+    )
+    authorize_url = f"https://github.com/login/oauth/authorize?{query}"
+    return RedirectResponse(url=authorize_url)
+
+
+@app.get("/auth/github/callback")
+def github_callback(
+    code: str | None = None, db: Session = Depends(get_db)
+) -> dict[str, str]:
+    if not code:
+        raise HTTPException(status_code=400, detail="missing code")
+
+    settings = Settings()
+    if not settings.github_oauth_client_id:
+        raise HTTPException(status_code=500, detail="GITHUB_OAUTH_CLIENT_ID is not set")
+    if not settings.github_oauth_client_secret:
+        raise HTTPException(
+            status_code=500,
+            detail="GITHUB_OAUTH_CLIENT_SECRET is not set",
+        )
+
+    try:
+        access_token = exchange_code_for_access_token(
+            code=code,
+            client_id=settings.github_oauth_client_id,
+            client_secret=settings.github_oauth_client_secret,
+        )
+        github_user = fetch_authenticated_user(access_token)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="GitHub OAuth request failed"
+        ) from exc
+
+    raw_user_id = github_user.get("id")
+    raw_username = github_user.get("login")
+    if not isinstance(raw_user_id, int) or not isinstance(raw_username, str):
+        raise HTTPException(status_code=502, detail="GitHub OAuth response is invalid")
+
+    github_user_id = str(raw_user_id)
+    username = raw_username.lower()
+
+    profile = db.scalar(
+        select(GitHubProfile).where(GitHubProfile.github_user_id == github_user_id)
+    )
+    if profile is None:
+        profile = get_profile_by_username(db, username)
+        if profile is not None and profile.github_user_id not in (None, github_user_id):
+            raise HTTPException(status_code=409, detail="username already assigned")
+
+    if profile is None:
+        profile = GitHubProfile(
+            username=username,
+            github_user_id=github_user_id,
+            public_id=str(uuid4()),
+        )
+        db.add(profile)
+    else:
+        profile.username = username
+        profile.github_user_id = github_user_id
+        if not profile.public_id:
+            profile.public_id = str(uuid4())
+
+    db.commit()
+    db.refresh(profile)
+
+    base_url = settings.app_base_url.rstrip("/")
+    panel_url = f"{base_url}/public/{profile.public_id}"
+    json_url = f"{panel_url}/heatmap.json"
+
+    return {
+        "username": profile.username,
+        "public_id": profile.public_id,
+        "panel_url": panel_url,
+        "json_url": json_url,
+    }
 
 
 @app.get("/demo/{username}", response_class=HTMLResponse)
@@ -199,6 +328,110 @@ def demo_heatmap(username: str) -> str:
 </html>"""
 
 
+@app.get("/public/{public_id}", response_class=HTMLResponse)
+def public_heatmap_page(public_id: str) -> str:
+    safe_public_id = json.dumps(public_id)
+    return f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>Public Heatmap</title>
+  <style>
+    body {{ margin: 0; padding: 24px; font-family: Segoe UI, sans-serif; background: #f6f8fa; color: #24292f; }}
+    .card {{ max-width: 1120px; margin: 0 auto; background: #fff; border: 1px solid #d0d7de; border-radius: 12px; padding: 20px; }}
+    .row {{ display: flex; justify-content: space-between; gap: 12px; align-items: baseline; flex-wrap: wrap; }}
+    .title {{ font-size: 22px; font-weight: 600; }}
+    .muted {{ color: #57606a; font-size: 13px; }}
+    .link {{ margin-top: 8px; font-size: 13px; }}
+    .link a {{ color: #0969da; text-decoration: none; }}
+    .months {{ display: flex; gap: 4px; margin: 16px 0 6px 40px; color: #57606a; font-size: 12px; }}
+    .grid-wrap {{ display: grid; grid-template-columns: 32px auto; gap: 8px; overflow-x: auto; }}
+    .weekdays {{ display: grid; grid-template-rows: repeat(7, 12px); row-gap: 3px; color: #57606a; font-size: 11px; margin-top: 2px; }}
+    .weeks {{ display: grid; grid-auto-flow: column; grid-auto-columns: 12px; column-gap: 3px; }}
+    .week {{ display: grid; grid-template-rows: repeat(7, 12px); row-gap: 3px; }}
+    .cell {{ width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(27,31,36,0.06); }}
+    .l0 {{ background: #ebedf0; }} .l1 {{ background: #9be9a8; }} .l2 {{ background: #40c463; }} .l3 {{ background: #30a14e; }} .l4 {{ background: #216e39; }}
+  </style>
+</head>
+<body>
+  <div class=\"card\">
+    <div class=\"row\">
+      <div>
+        <div class=\"title\">Public Heatmap</div>
+        <div id=\"range\" class=\"muted\">Loading...</div>
+        <div class=\"link\">JSON source: <a id=\"jsonLink\" href=\"#\">open</a></div>
+      </div>
+    </div>
+    <div id=\"months\" class=\"months\"></div>
+    <div class=\"grid-wrap\">
+      <div id=\"weekdayLabels\" class=\"weekdays\"></div>
+      <div id=\"weeks\" class=\"weeks\"></div>
+    </div>
+    <div id=\"status\" class=\"muted\" style=\"margin-top: 12px;\"></div>
+  </div>
+
+  <script>
+    const publicId = {safe_public_id};
+    const jsonPath = `/public/${{publicId}}/heatmap.json`;
+    document.getElementById('jsonLink').href = jsonPath;
+
+    function labelForWeekday(idx) {{
+      return idx === 1 || idx === 3 || idx === 5 ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][idx] : '';
+    }}
+
+    async function load() {{
+      const status = document.getElementById('status');
+      try {{
+        const res = await fetch(jsonPath);
+        if (!res.ok) throw new Error(`API error: ${{res.status}}`);
+        const grid = await res.json();
+
+        document.getElementById('range').textContent = `@${{grid.username}} | ${{grid.from}} to ${{grid.to}} | total: ${{grid.total}}`;
+
+        const weekdays = document.getElementById('weekdayLabels');
+        weekdays.innerHTML = '';
+        for (let i = 0; i < 7; i++) {{
+          const row = document.createElement('div');
+          row.textContent = labelForWeekday(i);
+          weekdays.appendChild(row);
+        }}
+
+        const months = document.getElementById('months');
+        months.innerHTML = '';
+        for (const m of grid.month_labels || []) {{
+          const el = document.createElement('div');
+          el.textContent = m.label;
+          el.style.minWidth = '52px';
+          months.appendChild(el);
+        }}
+
+        const weeks = document.getElementById('weeks');
+        weeks.innerHTML = '';
+        for (const week of grid.weeks) {{
+          const col = document.createElement('div');
+          col.className = 'week';
+          for (const day of week.days) {{
+            const cell = document.createElement('div');
+            cell.className = `cell l${{day.level}}`;
+            cell.title = `${{day.date}}: ${{day.count}}`;
+            col.appendChild(cell);
+          }}
+          weeks.appendChild(col);
+        }}
+
+        status.textContent = 'Loaded successfully';
+      }} catch (err) {{
+        status.textContent = `Cannot load heatmap for public profile. ${{err.message}}`;
+      }}
+    }}
+
+    load();
+  </script>
+</body>
+</html>"""
+
+
 @app.get("/meta/heatmap")
 def get_heatmap_meta() -> dict[str, object]:
     return {
@@ -260,9 +493,7 @@ def create_or_update_heatmap_day(
     payload: HeatmapDayCreate,
     db: Session = Depends(get_db),
 ) -> dict[str, str | int]:
-    profile = db.scalar(
-        select(GitHubProfile).where(GitHubProfile.username == username.lower())
-    )
+    profile = get_profile_by_username(db, username)
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
 
@@ -287,13 +518,65 @@ def create_or_update_heatmap_day(
     return {"day": payload.day.isoformat(), "count": payload.count}
 
 
+@app.get("/heatmap/me")
+def get_authenticated_user_heatmap(
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> dict[str, object]:
+    token = extract_bearer_token(credentials)
+    settings = Settings()
+
+    try:
+        github_user = fetch_authenticated_user(token)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=401, detail="GitHub token is invalid"
+            ) from exc
+        raise HTTPException(
+            status_code=502, detail="GitHub API request failed"
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="GitHub API request failed"
+        ) from exc
+
+    raw_username = github_user.get("login")
+    if not isinstance(raw_username, str) or not raw_username:
+        raise HTTPException(status_code=502, detail="GitHub user response is invalid")
+    username = raw_username.lower()
+
+    try:
+        contribution_days = fetch_contribution_days(
+            username=username,
+            token=token,
+            graphql_url=settings.github_graphql_url,
+        )
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code in {401, 403}:
+            raise HTTPException(
+                status_code=401, detail="GitHub token is invalid"
+            ) from exc
+        raise HTTPException(
+            status_code=502, detail="GitHub API request failed"
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail="GitHub API request failed"
+        ) from exc
+
+    weeks, total = build_weeks_payload(contribution_days)
+    return {
+        "username": username,
+        "total": total,
+        "weeks": weeks,
+    }
+
+
 @app.get("/heatmap/{username}")
 def get_heatmap(
     username: str, db: Session = Depends(get_db)
 ) -> list[dict[str, str | int]]:
-    profile = db.scalar(
-        select(GitHubProfile).where(GitHubProfile.username == username.lower())
-    )
+    profile = get_profile_by_username(db, username)
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
 
@@ -314,24 +597,11 @@ def get_calendar_heatmap(
     to_date: date | None = Query(default=None, alias="to"),
     db: Session = Depends(get_db),
 ) -> dict[str, str | int | list[dict[str, str | int]]]:
-    profile = db.scalar(
-        select(GitHubProfile).where(GitHubProfile.username == username.lower())
-    )
+    profile = get_profile_by_username(db, username)
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
 
-    if from_date is None and to_date is None:
-        to_date = date.today()
-        from_date = to_date - timedelta(days=364)
-    elif from_date is None or to_date is None:
-        raise HTTPException(
-            status_code=400, detail="from and to must be provided together"
-        )
-
-    if from_date > to_date:
-        raise HTTPException(
-            status_code=400, detail="from must be before or equal to to"
-        )
+    from_date, to_date = resolve_date_range(from_date, to_date)
 
     selected_days = db.scalars(
         select(HeatmapDay)
@@ -373,32 +643,65 @@ def contribution_level(count: int) -> int:
     return 4
 
 
-@app.get("/heatmap/{username}/calendar-grid")
-def get_calendar_grid(
-    username: str,
-    from_date: date | None = Query(default=None, alias="from"),
-    to_date: date | None = Query(default=None, alias="to"),
-    db: Session = Depends(get_db),
+def extract_bearer_token(credentials: HTTPAuthorizationCredentials | None) -> str:
+    if credentials is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization Bearer token is required",
+        )
+
+    if credentials.scheme.lower() != "bearer" or not credentials.credentials.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization Bearer token is required",
+        )
+
+    return credentials.credentials.strip()
+
+
+def build_weeks_payload(
+    contribution_days: list[dict[str, str | int]],
+) -> tuple[list[dict[str, object]], int]:
+    grouped_weeks: dict[date, list[dict[str, int | str]]] = {}
+    total = 0
+
+    for item in contribution_days:
+        raw_day = item.get("date")
+        raw_count = item.get("count")
+        if not isinstance(raw_day, str) or not isinstance(raw_count, int):
+            continue
+
+        try:
+            parsed_day = date.fromisoformat(raw_day)
+        except ValueError:
+            continue
+
+        weekday = (parsed_day.weekday() + 1) % 7
+        week_start = parsed_day - timedelta(days=weekday)
+        grouped_weeks.setdefault(week_start, []).append(
+            {
+                "date": parsed_day.isoformat(),
+                "weekday": weekday,
+                "count": raw_count,
+                "level": contribution_level(raw_count),
+            }
+        )
+        total += raw_count
+
+    weeks: list[dict[str, object]] = []
+    for week_start in sorted(grouped_weeks):
+        days = sorted(grouped_weeks[week_start], key=lambda day: int(day["weekday"]))
+        weeks.append({"week_start": week_start.isoformat(), "days": days})
+
+    return weeks, total
+
+
+def build_calendar_grid_payload(
+    profile: GitHubProfile,
+    db: Session,
+    from_date: date,
+    to_date: date,
 ) -> dict[str, object]:
-    profile = db.scalar(
-        select(GitHubProfile).where(GitHubProfile.username == username.lower())
-    )
-    if not profile:
-        raise HTTPException(status_code=404, detail="profile not found")
-
-    if from_date is None and to_date is None:
-        to_date = date.today()
-        from_date = to_date - timedelta(days=364)
-    elif from_date is None or to_date is None:
-        raise HTTPException(
-            status_code=400, detail="from and to must be provided together"
-        )
-
-    if from_date > to_date:
-        raise HTTPException(
-            status_code=400, detail="from must be before or equal to to"
-        )
-
     selected_days = db.scalars(
         select(HeatmapDay)
         .where(HeatmapDay.profile_id == profile.id)
@@ -454,6 +757,7 @@ def get_calendar_grid(
 
     return {
         "username": profile.username,
+        "public_id": profile.public_id,
         "from": from_date.isoformat(),
         "to": to_date.isoformat(),
         "total": total,
@@ -461,6 +765,39 @@ def get_calendar_grid(
         "month_labels": month_labels,
         "weeks": weeks,
     }
+
+
+@app.get("/heatmap/{username}/calendar-grid")
+def get_calendar_grid(
+    username: str,
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    profile = get_profile_by_username(db, username)
+    if not profile:
+        raise HTTPException(status_code=404, detail="profile not found")
+    from_date, to_date = resolve_date_range(from_date, to_date)
+    return build_calendar_grid_payload(
+        profile=profile, db=db, from_date=from_date, to_date=to_date
+    )
+
+
+@app.get("/public/{public_id}/heatmap.json")
+def get_public_heatmap_json(
+    public_id: str,
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    profile = get_profile_by_public_id(db, public_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="public profile not found")
+
+    from_date, to_date = resolve_date_range(from_date, to_date)
+    return build_calendar_grid_payload(
+        profile=profile, db=db, from_date=from_date, to_date=to_date
+    )
 
 
 @app.post("/profiles/{username}/sync")

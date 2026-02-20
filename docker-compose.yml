@@ -8,5 +8,6 @@ services:
       - .env
     environment:
       GITHUB_GRAPHQL_URL: ${GITHUB_GRAPHQL_URL:-https://api.github.com/graphql}
+      PORT: ${PORT:-8000}
     ports:
       - "8000:8000"

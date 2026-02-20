@@ -7,10 +7,10 @@ on:
     branches: ["main"]
 
 env:
-  PROJECT_ID: twoj-project-id        # ← zmień
-  REGION: europe-west1               # ← zmień jeśli inny region
-  SERVICE: my-app                    # ← nazwa usługi w Cloud Run
-  REGISTRY: europe-west1-docker.pkg.dev
+  PROJECT_ID: dtc-de-course-486215
+  REGION: europe-central2
+  SERVICE: heatmap
+  REGISTRY: europe-central2-docker.pkg.dev
 
 jobs:
   build-and-deploy:

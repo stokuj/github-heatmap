@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from fastapi.responses import HTMLResponse
 from sqlalchemy import delete
+from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -471,11 +472,63 @@ def sync_profile(username: str, db: Session = Depends(get_db)) -> dict[str, int 
     if not profile:
         raise HTTPException(status_code=404, detail="profile not found")
 
+    settings = Settings()
+    now = datetime.now(UTC)
+
+    latest_run = db.scalar(
+        select(SyncRun)
+        .where(SyncRun.profile_id == profile.id)
+        .order_by(SyncRun.started_at.desc())
+        .limit(1)
+    )
+    if latest_run is not None:
+        last_started_at = latest_run.started_at
+        if last_started_at.tzinfo is None:
+            last_started_at = last_started_at.replace(tzinfo=UTC)
+        elapsed_seconds = (now - last_started_at).total_seconds()
+        if elapsed_seconds < settings.sync_cooldown_seconds:
+            retry_after = max(1, int(settings.sync_cooldown_seconds - elapsed_seconds))
+            raise HTTPException(
+                status_code=429,
+                detail="sync rate limited",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+    hourly_window_start = now - timedelta(hours=1)
+    runs_in_hour = db.scalar(
+        select(func.count(SyncRun.id))
+        .where(SyncRun.profile_id == profile.id)
+        .where(SyncRun.started_at >= hourly_window_start)
+    )
+    runs_in_hour = int(runs_in_hour or 0)
+
+    if runs_in_hour >= settings.sync_max_per_hour:
+        oldest_run_in_window = db.scalar(
+            select(SyncRun)
+            .where(SyncRun.profile_id == profile.id)
+            .where(SyncRun.started_at >= hourly_window_start)
+            .order_by(SyncRun.started_at.asc())
+            .limit(1)
+        )
+
+        retry_after = 3600
+        if oldest_run_in_window is not None:
+            oldest_started_at = oldest_run_in_window.started_at
+            if oldest_started_at.tzinfo is None:
+                oldest_started_at = oldest_started_at.replace(tzinfo=UTC)
+            age_seconds = (now - oldest_started_at).total_seconds()
+            retry_after = max(1, int(3600 - age_seconds))
+
+        raise HTTPException(
+            status_code=429,
+            detail="hourly sync limit reached",
+            headers={"Retry-After": str(retry_after)},
+        )
+
     sync_run = SyncRun(profile_id=profile.id, status="running")
     db.add(sync_run)
     db.flush()
 
-    settings = Settings()
     if not settings.github_token:
         sync_run.status = "failed"
         sync_run.error_message = "GITHUB_TOKEN is not set"

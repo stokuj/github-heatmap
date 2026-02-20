@@ -147,6 +147,62 @@ def test_sync_profile_returns_404_for_missing_profile(db_client: TestClient) -> 
     assert response.json() == {"detail": "profile not found"}
 
 
+def test_sync_profile_rate_limits_second_immediate_request(
+    monkeypatch: pytest.MonkeyPatch, db_client: TestClient
+) -> None:
+    db_client.post("/profiles", json={"username": "octocat"})
+
+    def fake_fetch_contribution_days(
+        username: str,
+        token: str,
+        graphql_url: str,
+    ):
+        return [{"date": "2026-02-20", "count": 2}]
+
+    monkeypatch.setattr(
+        "backend.main.fetch_contribution_days", fake_fetch_contribution_days
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+
+    first = db_client.post("/profiles/octocat/sync")
+    second = db_client.post("/profiles/octocat/sync")
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert second.json()["detail"] == "sync rate limited"
+    assert int(second.headers["Retry-After"]) > 0
+
+
+def test_sync_profile_rate_limits_when_hourly_limit_reached(
+    monkeypatch: pytest.MonkeyPatch, db_client: TestClient
+) -> None:
+    db_client.post("/profiles", json={"username": "octocat"})
+
+    def fake_fetch_contribution_days(
+        username: str,
+        token: str,
+        graphql_url: str,
+    ):
+        return [{"date": "2026-02-20", "count": 2}]
+
+    monkeypatch.setattr(
+        "backend.main.fetch_contribution_days", fake_fetch_contribution_days
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setenv("SYNC_COOLDOWN_SECONDS", "0")
+    monkeypatch.setenv("SYNC_MAX_PER_HOUR", "2")
+
+    first = db_client.post("/profiles/octocat/sync")
+    second = db_client.post("/profiles/octocat/sync")
+    third = db_client.post("/profiles/octocat/sync")
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 429
+    assert third.json()["detail"] == "hourly sync limit reached"
+    assert int(third.headers["Retry-After"]) > 0
+
+
 def test_get_calendar_heatmap_returns_zero_filled_range(db_client: TestClient) -> None:
     db_client.post("/profiles", json={"username": "octocat"})
     db_client.post("/profiles/octocat/days", json={"day": "2026-02-19", "count": 2})

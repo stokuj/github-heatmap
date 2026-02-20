@@ -103,30 +103,24 @@ def test_sync_profile_fetches_events_and_rebuilds_heatmap(
 ) -> None:
     db_client.post("/profiles", json={"username": "octocat"})
 
-    def fake_fetch_user_events(username: str, token: str | None, api_base_url: str):
+    def fake_fetch_contribution_days(
+        username: str,
+        token: str,
+        graphql_url: str,
+    ):
         assert username == "octocat"
+        assert token == "test-token"
+        assert graphql_url == "https://api.github.com/graphql"
         return [
-            {
-                "id": "1001",
-                "type": "PushEvent",
-                "created_at": "2026-02-20T10:00:00Z",
-                "repo": {"name": "octocat/hello"},
-            },
-            {
-                "id": "1002",
-                "type": "IssuesEvent",
-                "created_at": "2026-02-20T12:00:00Z",
-                "repo": {"name": "octocat/hello"},
-            },
-            {
-                "id": "1003",
-                "type": "PushEvent",
-                "created_at": "2026-02-19T08:00:00Z",
-                "repo": {"name": "octocat/demo"},
-            },
+            {"date": "2026-02-20", "count": 2},
+            {"date": "2026-02-19", "count": 28},
+            {"date": "2025-04-13", "count": 1},
         ]
 
-    monkeypatch.setattr("backend.main.fetch_user_events", fake_fetch_user_events)
+    monkeypatch.setattr(
+        "backend.main.fetch_contribution_days", fake_fetch_contribution_days
+    )
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
 
     sync_response = db_client.post("/profiles/octocat/sync")
     heatmap_response = db_client.get("/heatmap/octocat")
@@ -136,11 +130,12 @@ def test_sync_profile_fetches_events_and_rebuilds_heatmap(
         "status": "ok",
         "fetched": 3,
         "saved": 3,
-        "days_updated": 2,
+        "days_updated": 3,
     }
     assert heatmap_response.status_code == 200
     assert heatmap_response.json() == [
-        {"day": "2026-02-19", "count": 1},
+        {"day": "2025-04-13", "count": 1},
+        {"day": "2026-02-19", "count": 28},
         {"day": "2026-02-20", "count": 2},
     ]
 
@@ -259,3 +254,12 @@ def test_get_heatmap_meta_returns_weekday_and_level_labels() -> None:
             {"level": 4, "label": "10+", "min": 10, "max": None},
         ],
     }
+
+
+def test_demo_endpoint_returns_html() -> None:
+    response = client.get("/demo/octocat")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "GitHub Heatmap Demo" in response.text
+    assert "/heatmap/${username}/calendar-grid" in response.text

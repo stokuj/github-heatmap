@@ -2,6 +2,7 @@ from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from datetime import UTC
+import json
 
 from fastapi import Depends
 from fastapi import FastAPI
@@ -9,6 +10,7 @@ from fastapi import HTTPException
 from fastapi import Query
 from pydantic import BaseModel
 from pydantic import Field
+from fastapi.responses import HTMLResponse
 from sqlalchemy import delete
 from sqlalchemy import select
 from sqlalchemy import text
@@ -16,8 +18,7 @@ from sqlalchemy.orm import Session
 
 from backend.db import engine
 from backend.db import get_db
-from backend.github_api import fetch_user_events
-from backend.models import GitHubEvent
+from backend.github_api import fetch_contribution_days
 from backend.models import GitHubProfile
 from backend.models import HeatmapDay
 from backend.models import SyncRun
@@ -44,30 +45,157 @@ class HeatmapDayCreate(BaseModel):
     count: int = Field(ge=0)
 
 
-def parse_github_datetime(raw_value: str) -> datetime:
-    return datetime.fromisoformat(raw_value.replace("Z", "+00:00"))
-
-
-def rebuild_heatmap_days_for_profile(db: Session, profile_id: int) -> int:
-    events = db.scalars(
-        select(GitHubEvent).where(GitHubEvent.profile_id == profile_id)
-    ).all()
-
-    aggregated_counts: dict[date, int] = {}
-    for event in events:
-        day = event.event_created_at.date()
-        aggregated_counts[day] = aggregated_counts.get(day, 0) + 1
-
+def rebuild_heatmap_days_for_profile(
+    db: Session,
+    profile_id: int,
+    contribution_days: list[dict[str, str | int]],
+) -> int:
     db.execute(delete(HeatmapDay).where(HeatmapDay.profile_id == profile_id))
-    for day, count in sorted(aggregated_counts.items()):
-        db.add(HeatmapDay(profile_id=profile_id, day=day, contribution_count=count))
 
-    return len(aggregated_counts)
+    saved_rows = 0
+    for item in contribution_days:
+        raw_day = item.get("date")
+        raw_count = item.get("count")
+        if not isinstance(raw_day, str) or not isinstance(raw_count, int):
+            continue
+
+        parsed_day = date.fromisoformat(raw_day)
+        if raw_count <= 0:
+            continue
+
+        db.add(
+            HeatmapDay(
+                profile_id=profile_id,
+                day=parsed_day,
+                contribution_count=raw_count,
+            )
+        )
+        saved_rows += 1
+
+    return saved_rows
 
 
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
+@app.get("/demo/{username}", response_class=HTMLResponse)
+def demo_heatmap(username: str) -> str:
+    safe_username = json.dumps(username.lower())
+    return f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>Heatmap Demo</title>
+  <style>
+    :root {{
+      --bg: #f6f8fa;
+      --panel: #ffffff;
+      --text: #24292f;
+      --muted: #57606a;
+      --border: #d0d7de;
+      --l0: #ebedf0;
+      --l1: #9be9a8;
+      --l2: #40c463;
+      --l3: #30a14e;
+      --l4: #216e39;
+    }}
+    body {{ margin: 0; padding: 24px; font-family: Segoe UI, sans-serif; background: var(--bg); color: var(--text); }}
+    .card {{ max-width: 1100px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }}
+    .top {{ display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }}
+    .title {{ font-size: 20px; font-weight: 600; }}
+    .muted {{ color: var(--muted); font-size: 13px; }}
+    .legend {{ display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); }}
+    .cell {{ width: 11px; height: 11px; border-radius: 2px; border: 1px solid rgba(27,31,36,0.06); }}
+    .l0 {{ background: var(--l0); }} .l1 {{ background: var(--l1); }} .l2 {{ background: var(--l2); }} .l3 {{ background: var(--l3); }} .l4 {{ background: var(--l4); }}
+    .months {{ display: flex; gap: 4px; margin: 16px 0 6px 40px; color: var(--muted); font-size: 12px; }}
+    .grid-wrap {{ display: grid; grid-template-columns: 32px auto; gap: 8px; overflow-x: auto; }}
+    .weekdays {{ display: grid; grid-template-rows: repeat(7, 12px); row-gap: 3px; color: var(--muted); font-size: 11px; margin-top: 2px; }}
+    .weeks {{ display: grid; grid-auto-flow: column; grid-auto-columns: 12px; column-gap: 3px; }}
+    .week {{ display: grid; grid-template-rows: repeat(7, 12px); row-gap: 3px; }}
+    .status {{ margin-top: 12px; font-size: 13px; color: var(--muted); }}
+  </style>
+</head>
+<body>
+  <div class=\"card\">
+    <div class=\"top\">
+      <div>
+        <div class=\"title\">GitHub Heatmap Demo</div>
+        <div id=\"range\" class=\"muted\">Loading...</div>
+      </div>
+      <div class=\"legend\">Less
+        <span class=\"cell l0\"></span><span class=\"cell l1\"></span><span class=\"cell l2\"></span><span class=\"cell l3\"></span><span class=\"cell l4\"></span>
+        More
+      </div>
+    </div>
+    <div id=\"months\" class=\"months\"></div>
+    <div class=\"grid-wrap\">
+      <div id=\"weekdayLabels\" class=\"weekdays\"></div>
+      <div id=\"weeks\" class=\"weeks\"></div>
+    </div>
+    <div id=\"status\" class=\"status\"></div>
+  </div>
+
+  <script>
+    const username = {safe_username};
+
+    function labelForWeekday(idx) {{
+      return idx === 1 || idx === 3 || idx === 5 ? ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][idx] : '';
+    }}
+
+    async function load() {{
+      const status = document.getElementById('status');
+      try {{
+        const gridRes = await fetch(`/heatmap/${{username}}/calendar-grid`);
+        if (!gridRes.ok) throw new Error(`API error: ${{gridRes.status}}`);
+        const grid = await gridRes.json();
+
+        document.getElementById('range').textContent = `@${{grid.username}} | ${{grid.from}} to ${{grid.to}} | total: ${{grid.total}}`;
+
+        const weekdays = document.getElementById('weekdayLabels');
+        weekdays.innerHTML = '';
+        const labels = grid.weekday_labels || ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        for (let i = 0; i < 7; i++) {{
+          const row = document.createElement('div');
+          row.textContent = labelForWeekday(i) || '';
+          weekdays.appendChild(row);
+        }}
+
+        const months = document.getElementById('months');
+        months.innerHTML = '';
+        for (const m of grid.month_labels || []) {{
+          const el = document.createElement('div');
+          el.textContent = m.label;
+          el.style.minWidth = '52px';
+          months.appendChild(el);
+        }}
+
+        const weeks = document.getElementById('weeks');
+        weeks.innerHTML = '';
+        for (const week of grid.weeks) {{
+          const col = document.createElement('div');
+          col.className = 'week';
+          for (const day of week.days) {{
+            const cell = document.createElement('div');
+            cell.className = `cell l${{day.level}}`;
+            cell.title = `${{day.date}}: ${{day.count}}`;
+            col.appendChild(cell);
+          }}
+          weeks.appendChild(col);
+        }}
+
+        status.textContent = 'Loaded successfully';
+      }} catch (err) {{
+        status.textContent = `Cannot load heatmap for @${{username}}. ${{err.message}}`;
+      }}
+    }}
+
+    load();
+  </script>
+</body>
+</html>"""
 
 
 @app.get("/meta/heatmap")
@@ -348,12 +476,18 @@ def sync_profile(username: str, db: Session = Depends(get_db)) -> dict[str, int 
     db.flush()
 
     settings = Settings()
+    if not settings.github_token:
+        sync_run.status = "failed"
+        sync_run.error_message = "GITHUB_TOKEN is not set"
+        sync_run.finished_at = datetime.now(UTC)
+        db.commit()
+        raise HTTPException(status_code=500, detail="GITHUB_TOKEN is not set")
 
     try:
-        remote_events = fetch_user_events(
+        contribution_days = fetch_contribution_days(
             username=normalized_username,
             token=settings.github_token,
-            api_base_url=settings.github_api_base_url,
+            graphql_url=settings.github_graphql_url,
         )
     except Exception as exc:
         sync_run.status = "failed"
@@ -364,52 +498,22 @@ def sync_profile(username: str, db: Session = Depends(get_db)) -> dict[str, int 
             status_code=502, detail="GitHub API request failed"
         ) from exc
 
-    saved_count = 0
-    for item in remote_events:
-        event_id = item.get("id")
-        event_type = item.get("type")
-        created_at_raw = item.get("created_at")
-        repo_data = item.get("repo")
-        repo_name = repo_data.get("name") if isinstance(repo_data, dict) else None
-
-        if not isinstance(event_id, str):
-            continue
-        if not isinstance(event_type, str):
-            continue
-        if not isinstance(created_at_raw, str):
-            continue
-
-        existing_event = db.scalar(
-            select(GitHubEvent).where(GitHubEvent.github_event_id == event_id)
-        )
-        if existing_event:
-            continue
-
-        db.add(
-            GitHubEvent(
-                profile_id=profile.id,
-                github_event_id=event_id,
-                event_type=event_type,
-                repo_name=repo_name,
-                event_created_at=parse_github_datetime(created_at_raw),
-                payload=item,
-            )
-        )
-        saved_count += 1
-
-    db.flush()
-    days_updated = rebuild_heatmap_days_for_profile(db=db, profile_id=profile.id)
+    days_updated = rebuild_heatmap_days_for_profile(
+        db=db,
+        profile_id=profile.id,
+        contribution_days=contribution_days,
+    )
 
     sync_run.status = "success"
-    sync_run.fetched_count = len(remote_events)
-    sync_run.saved_count = saved_count
+    sync_run.fetched_count = len(contribution_days)
+    sync_run.saved_count = days_updated
     sync_run.error_message = None
     sync_run.finished_at = datetime.now(UTC)
     db.commit()
 
     return {
         "status": "ok",
-        "fetched": len(remote_events),
-        "saved": saved_count,
+        "fetched": len(contribution_days),
+        "saved": days_updated,
         "days_updated": days_updated,
     }

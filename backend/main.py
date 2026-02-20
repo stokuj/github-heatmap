@@ -25,6 +25,15 @@ from backend.settings import Settings
 
 app = FastAPI()
 
+WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+HEATMAP_LEVELS = [
+    {"level": 0, "label": "0", "min": 0, "max": 0},
+    {"level": 1, "label": "1-2", "min": 1, "max": 2},
+    {"level": 2, "label": "3-5", "min": 3, "max": 5},
+    {"level": 3, "label": "6-9", "min": 6, "max": 9},
+    {"level": 4, "label": "10+", "min": 10, "max": None},
+]
+
 
 class ProfileCreate(BaseModel):
     username: str = Field(min_length=1, max_length=100)
@@ -59,6 +68,14 @@ def rebuild_heatmap_days_for_profile(db: Session, profile_id: int) -> int:
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
+@app.get("/meta/heatmap")
+def get_heatmap_meta() -> dict[str, object]:
+    return {
+        "weekday_labels": WEEKDAY_LABELS,
+        "levels": HEATMAP_LEVELS,
+    }
 
 
 @app.get("/health/db")
@@ -212,6 +229,108 @@ def get_calendar_heatmap(
         "to": to_date.isoformat(),
         "total": total,
         "days": days,
+    }
+
+
+def contribution_level(count: int) -> int:
+    if count <= 0:
+        return 0
+    if count <= 2:
+        return 1
+    if count <= 5:
+        return 2
+    if count <= 9:
+        return 3
+    return 4
+
+
+@app.get("/heatmap/{username}/calendar-grid")
+def get_calendar_grid(
+    username: str,
+    from_date: date | None = Query(default=None, alias="from"),
+    to_date: date | None = Query(default=None, alias="to"),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    profile = db.scalar(
+        select(GitHubProfile).where(GitHubProfile.username == username.lower())
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="profile not found")
+
+    if from_date is None and to_date is None:
+        to_date = date.today()
+        from_date = to_date - timedelta(days=364)
+    elif from_date is None or to_date is None:
+        raise HTTPException(
+            status_code=400, detail="from and to must be provided together"
+        )
+
+    if from_date > to_date:
+        raise HTTPException(
+            status_code=400, detail="from must be before or equal to to"
+        )
+
+    selected_days = db.scalars(
+        select(HeatmapDay)
+        .where(HeatmapDay.profile_id == profile.id)
+        .where(HeatmapDay.day >= from_date)
+        .where(HeatmapDay.day <= to_date)
+        .order_by(HeatmapDay.day.asc())
+    ).all()
+    counts_by_date = {item.day: item.contribution_count for item in selected_days}
+
+    start_offset = (from_date.weekday() + 1) % 7
+    grid_start = from_date - timedelta(days=start_offset)
+    end_offset = (6 - ((to_date.weekday() + 1) % 7)) % 7
+    grid_end = to_date + timedelta(days=end_offset)
+
+    weeks: list[dict[str, object]] = []
+    month_labels: list[dict[str, str]] = []
+    current_week_start = grid_start
+    total = 0
+    last_labeled_month: str | None = None
+
+    while current_week_start <= grid_end:
+        week_days: list[dict[str, int | str]] = []
+        week_in_range_days: list[date] = []
+        for i in range(7):
+            current_day = current_week_start + timedelta(days=i)
+            count = counts_by_date.get(current_day, 0)
+            if from_date <= current_day <= to_date:
+                total += count
+                week_in_range_days.append(current_day)
+            week_days.append(
+                {
+                    "date": current_day.isoformat(),
+                    "weekday": i,
+                    "count": count,
+                    "level": contribution_level(count),
+                }
+            )
+
+        if week_in_range_days:
+            month_key = week_in_range_days[0].strftime("%Y-%m")
+            if month_key != last_labeled_month:
+                month_labels.append(
+                    {
+                        "week_start": current_week_start.isoformat(),
+                        "month": month_key,
+                        "label": week_in_range_days[0].strftime("%b"),
+                    }
+                )
+                last_labeled_month = month_key
+
+        weeks.append({"week_start": current_week_start.isoformat(), "days": week_days})
+        current_week_start += timedelta(days=7)
+
+    return {
+        "username": profile.username,
+        "from": from_date.isoformat(),
+        "to": to_date.isoformat(),
+        "total": total,
+        "weekday_labels": WEEKDAY_LABELS,
+        "month_labels": month_labels,
+        "weeks": weeks,
     }
 
 

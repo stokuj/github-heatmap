@@ -181,3 +181,81 @@ def test_get_calendar_heatmap_rejects_invalid_date_range(db_client: TestClient) 
 
     assert response.status_code == 400
     assert response.json() == {"detail": "from must be before or equal to to"}
+
+
+def test_get_calendar_grid_returns_github_style_weeks(db_client: TestClient) -> None:
+    db_client.post("/profiles", json={"username": "octocat"})
+    db_client.post("/profiles/octocat/days", json={"day": "2026-02-19", "count": 2})
+    db_client.post("/profiles/octocat/days", json={"day": "2026-02-20", "count": 7})
+
+    response = db_client.get(
+        "/heatmap/octocat/calendar-grid?from=2026-02-18&to=2026-02-21"
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["username"] == "octocat"
+    assert payload["from"] == "2026-02-18"
+    assert payload["to"] == "2026-02-21"
+    assert payload["total"] == 9
+    assert payload["weekday_labels"] == [
+        "Sun",
+        "Mon",
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Sat",
+    ]
+    assert payload["month_labels"] == [
+        {"week_start": "2026-02-15", "month": "2026-02", "label": "Feb"}
+    ]
+    assert payload["weeks"][0]["week_start"] == "2026-02-15"
+    assert len(payload["weeks"]) == 1
+
+    flattened_days = [day for week in payload["weeks"] for day in week["days"]]
+    day_map = {day["date"]: day for day in flattened_days}
+
+    assert day_map["2026-02-18"] == {
+        "date": "2026-02-18",
+        "weekday": 3,
+        "count": 0,
+        "level": 0,
+    }
+    assert day_map["2026-02-19"] == {
+        "date": "2026-02-19",
+        "weekday": 4,
+        "count": 2,
+        "level": 1,
+    }
+    assert day_map["2026-02-20"] == {
+        "date": "2026-02-20",
+        "weekday": 5,
+        "count": 7,
+        "level": 3,
+    }
+
+
+def test_get_calendar_grid_requires_complete_date_range(db_client: TestClient) -> None:
+    db_client.post("/profiles", json={"username": "octocat"})
+
+    response = db_client.get("/heatmap/octocat/calendar-grid?from=2026-02-01")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "from and to must be provided together"}
+
+
+def test_get_heatmap_meta_returns_weekday_and_level_labels() -> None:
+    response = client.get("/meta/heatmap")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "weekday_labels": ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"],
+        "levels": [
+            {"level": 0, "label": "0", "min": 0, "max": 0},
+            {"level": 1, "label": "1-2", "min": 1, "max": 2},
+            {"level": 2, "label": "3-5", "min": 3, "max": 5},
+            {"level": 3, "label": "6-9", "min": 6, "max": 9},
+            {"level": 4, "label": "10+", "min": 10, "max": None},
+        ],
+    }

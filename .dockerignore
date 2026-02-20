@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+.ruff_cache
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+.env
+.env.*
+tests
+.agents
+README.md
+LICENSE

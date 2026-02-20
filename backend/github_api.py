@@ -6,34 +6,6 @@ from typing import Any
 import httpx
 
 
-def exchange_code_for_access_token(
-    code: str,
-    client_id: str,
-    client_secret: str,
-) -> str:
-    response = httpx.post(
-        "https://github.com/login/oauth/access_token",
-        headers={"Accept": "application/json", "User-Agent": "github-heatmap-demo"},
-        data={
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "code": code,
-        },
-        timeout=15.0,
-    )
-    response.raise_for_status()
-
-    payload = response.json()
-    if not isinstance(payload, Mapping):
-        raise ValueError("GitHub OAuth response is invalid")
-
-    access_token = payload.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise ValueError("GitHub OAuth access token is missing")
-
-    return access_token
-
-
 def fetch_authenticated_user(token: str) -> dict[str, str | int]:
     response = httpx.get(
         "https://api.github.com/user",

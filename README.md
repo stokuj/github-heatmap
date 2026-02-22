@@ -15,9 +15,7 @@ github-heatmap/
 |- tests/
 |  |- test_main.py     # API tests
 |- docs/
-|  |- usage.md         # Setup and run guide
-|  |- roadmap.md       # Planned work
-|  |- decisions.md     # Technical decisions (including Alembic)
+|  |- usage.md         # Setup and run guideic)
 |- Dockerfile
 |- docker-compose.yml
 |- pyproject.toml

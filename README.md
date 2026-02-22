@@ -1,4 +1,4 @@
-# github-heatmap
+# Github Heatmap
 
 FastAPI service that receives requests through the `GET /heatmap/me` endpoint with an `Authorization: Bearer <GITHUB_TOKEN>` header, reads GitHub contribution activity for the authenticated user, and returns a heatmap-friendly JSON payload. 
 
@@ -15,9 +15,7 @@ github-heatmap/
 |- tests/
 |  |- test_main.py     # API tests
 |- docs/
-|  |- usage.md         # Setup and run guide
-|  |- roadmap.md       # Planned work
-|  |- decisions.md     # Technical decisions (including Alembic)
+|  |- usage.md         # Setup and run guideic)
 |- Dockerfile
 |- docker-compose.yml
 |- pyproject.toml

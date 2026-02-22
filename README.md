@@ -1,4 +1,4 @@
-# github-heatmap
+# Github Heatmap
 
 FastAPI service that receives requests through the `GET /heatmap/me` endpoint with an `Authorization: Bearer <GITHUB_TOKEN>` header, reads GitHub contribution activity for the authenticated user, and returns a heatmap-friendly JSON payload. 
 

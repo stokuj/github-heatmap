@@ -2,6 +2,7 @@ from datetime import date
 from datetime import timedelta
 
 import httpx
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi import Security
@@ -12,8 +13,25 @@ from backend.github_api import fetch_authenticated_user
 from backend.github_api import fetch_contribution_days
 from backend.settings import Settings
 
-app = FastAPI()
 bearer_scheme = HTTPBearer(auto_error=False)
+settings = Settings()
+
+
+def init_sentry(app_settings: Settings) -> None:
+    if not app_settings.sentry_dsn:
+        return
+
+    sentry_sdk.init(
+        dsn=app_settings.sentry_dsn,
+        environment=app_settings.environment,
+        release=app_settings.release,
+        traces_sample_rate=app_settings.sentry_traces_sample_rate,
+        send_default_pii=False,
+    )
+
+
+init_sentry(settings)
+app = FastAPI()
 
 
 def contribution_level(count: int) -> int:
@@ -96,7 +114,6 @@ def get_authenticated_user_heatmap(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
 ) -> dict[str, object]:
     token = extract_bearer_token(credentials)
-    settings = Settings()
 
     try:
         github_user = fetch_authenticated_user(token)

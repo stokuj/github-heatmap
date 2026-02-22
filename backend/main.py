@@ -109,6 +109,12 @@ def health_live() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/sentry-debug")
+async def trigger_error() -> None:
+    division_by_zero = 1 / 0
+    return division_by_zero
+
+
 @app.get("/heatmap/me")
 def get_authenticated_user_heatmap(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),

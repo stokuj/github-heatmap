@@ -2,7 +2,7 @@
 
 FastAPI service that receives requests through the `GET /heatmap/me` endpoint with an `Authorization: Bearer <GITHUB_TOKEN>` header, reads GitHub contribution activity for the authenticated user, and returns a heatmap-friendly JSON payload. 
 
-It was created to integrate with my Django portfolio, but due to its API-first, stateless design it can cooperate with any backend framework. The service is containerized (Docker), and GitHub Actions workflows are included for automated testing and container image build checks.
+It was created to integrate with my **Django** portfolio, but due to its **API-first**, **stateless** design it can cooperate with any backend framework. The service is containerized **Docker**, and **GitHub Actions** workflows are included for automated testing and container image build checks.
 
 ## Project Structure
 

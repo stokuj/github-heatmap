@@ -21,6 +21,14 @@ def test_health_live_returns_ok() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_sentry_debug_returns_500() -> None:
+    debug_client = TestClient(app, raise_server_exceptions=False)
+
+    response = debug_client.get("/sentry-debug")
+
+    assert response.status_code == 500
+
+
 def test_get_heatmap_me_requires_bearer_token() -> None:
     response = client.get("/heatmap/me")
 

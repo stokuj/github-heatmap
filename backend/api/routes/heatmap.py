@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from fastapi import Security
 from fastapi.security import HTTPAuthorizationCredentials
 
+from backend.api.schemas.heatmap import HeatmapResponse
 from backend.core.security import bearer_scheme
 from backend.core.security import extract_bearer_token
 from backend.services.heatmap_service import GitHubAPIError
@@ -36,23 +37,22 @@ async def trigger_error() -> None:
     if settings.environment != "development":
         raise HTTPException(status_code=404, detail="Not Found")
 
-    division_by_zero = 1 / 0
-    return division_by_zero
+    raise ZeroDivisionError("Sentry debug endpoint")
 
 
-@router.get("/heatmap/me")
+@router.get("/heatmap/me", response_model=HeatmapResponse)
 def get_authenticated_user_heatmap(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
-) -> dict[str, object]:
+) -> HeatmapResponse:
     """Return contribution heatmap payload for the authenticated GitHub user."""
 
     token = extract_bearer_token(credentials)
 
     try:
-        return get_authenticated_user_heatmap_data(
-            token=token,
-            graphql_url=settings.github_graphql_url,
+        payload = get_authenticated_user_heatmap_data(
+            token=token, graphql_url=settings.github_graphql_url
         )
+        return HeatmapResponse.model_validate(payload)
     except InvalidGitHubTokenError as exc:
         raise HTTPException(status_code=401, detail="GitHub token is invalid") from exc
     except GitHubAPIError as exc:

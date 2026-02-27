@@ -13,6 +13,8 @@ github-heatmap/
 |  |- main.py                  # FastAPI app factory and app instance
 |  |- settings.py              # Environment-based settings
 |  |- api/
+|  |  |- schemas/
+|  |  |  |- heatmap.py         # Pydantic response models
 |  |  |- routes/
 |  |  |  |- heatmap.py         # API routes/endpoints
 |  |- services/
@@ -72,7 +74,7 @@ API endpoints:
 
 - `GET /` - basic hello response
 - `GET /health/live` - liveness probe
-- `GET /heatmap/me` - authenticated heatmap payload (Bearer token required)
+- `GET /heatmap/me` - authenticated heatmap payload (Bearer token required, validated by `HeatmapResponse` model)
 
 See `docs/usage.md` for full setup details.
 

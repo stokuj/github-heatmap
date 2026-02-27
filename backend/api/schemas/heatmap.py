@@ -1,10 +1,12 @@
+from datetime import date
+
 from pydantic import BaseModel
 
 
 class HeatmapDay(BaseModel):
     """Single day item used in the heatmap response."""
 
-    date: str
+    date: date
     weekday: int
     count: int
     level: int
@@ -13,7 +15,7 @@ class HeatmapDay(BaseModel):
 class HeatmapWeek(BaseModel):
     """Week bucket containing ordered daily contribution items."""
 
-    week_start: str
+    week_start: date
     days: list[HeatmapDay]
 
 

@@ -6,8 +6,6 @@ from fastapi.security import HTTPAuthorizationCredentials
 from backend.api.schemas.heatmap import HeatmapResponse
 from backend.core.security import bearer_scheme
 from backend.core.security import extract_bearer_token
-from backend.services.heatmap_service import GitHubAPIError
-from backend.services.heatmap_service import InvalidGitHubTokenError
 from backend.services.heatmap_service import get_authenticated_user_heatmap_data
 from backend.settings import Settings
 
@@ -48,14 +46,7 @@ def get_authenticated_user_heatmap(
 
     token = extract_bearer_token(credentials)
 
-    try:
-        payload = get_authenticated_user_heatmap_data(
-            token=token, graphql_url=settings.github_graphql_url
-        )
-        return HeatmapResponse.model_validate(payload)
-    except InvalidGitHubTokenError as exc:
-        raise HTTPException(status_code=401, detail="GitHub token is invalid") from exc
-    except GitHubAPIError as exc:
-        raise HTTPException(
-            status_code=502, detail="GitHub API request failed"
-        ) from exc
+    payload = get_authenticated_user_heatmap_data(
+        token=token, graphql_url=settings.github_graphql_url
+    )
+    return HeatmapResponse.model_validate(payload)

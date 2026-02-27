@@ -10,7 +10,7 @@ The service was deployed on Google Cloud Run.
 ```text
 github-heatmap/
 |- backend/
-|  |- main.py                  # FastAPI app factory and main instance
+|  |- main.py                  # FastAPI app factory and app instance
 |  |- settings.py              # Environment-based settings
 |  |- api/
 |  |  |- routes/

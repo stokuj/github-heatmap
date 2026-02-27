@@ -31,7 +31,10 @@ def health_live() -> dict[str, str]:
 
 @router.get("/sentry-debug")
 async def trigger_error() -> None:
-    """Trigger a test exception endpoint for Sentry verification."""
+    """Trigger a test exception endpoint for Sentry verification in development."""
+
+    if settings.environment != "development":
+        raise HTTPException(status_code=404, detail="Not Found")
 
     division_by_zero = 1 / 0
     return division_by_zero

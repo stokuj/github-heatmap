@@ -1,10 +1,10 @@
 import httpx
 from fastapi.testclient import TestClient
 
-from backend.main import main
+from backend.main import app
 
 
-client = TestClient(main)
+client = TestClient(app)
 
 
 def test_read_root_returns_hello_world() -> None:
@@ -28,11 +28,23 @@ def test_health_live_returns_ok() -> None:
 def test_sentry_debug_returns_500() -> None:
     """Sentry debug endpoint raises an internal server error."""
 
-    debug_client = TestClient(main, raise_server_exceptions=False)
+    debug_client = TestClient(app, raise_server_exceptions=False)
 
     response = debug_client.get("/sentry-debug")
 
     assert response.status_code == 500
+
+
+def test_sentry_debug_returns_404_outside_development(monkeypatch) -> None:
+    """Sentry debug endpoint is hidden when environment is not development."""
+
+    debug_client = TestClient(app, raise_server_exceptions=False)
+    monkeypatch.setattr("backend.api.routes.heatmap.settings.environment", "production")
+
+    response = debug_client.get("/sentry-debug")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Not Found"}
 
 
 def test_get_heatmap_me_requires_bearer_token() -> None:

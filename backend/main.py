@@ -5,7 +5,7 @@ from backend.core.observability import init_sentry
 from backend.settings import Settings
 
 
-def create_main() -> FastAPI:
+def create_app() -> FastAPI:
     """Create and configure the FastAPI application instance."""
 
     app_settings = Settings()
@@ -16,4 +16,4 @@ def create_main() -> FastAPI:
     return fastapi_app
 
 
-main = create_main()
+app = create_app()

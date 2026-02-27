@@ -23,7 +23,7 @@ SENTRY_TRACES_SAMPLE_RATE=0.1
 
 ```bash
 uv sync --dev
-uv run uvicorn backend.main:main --reload
+uv run uvicorn backend.main:app --reload
 ```
 
 Open:

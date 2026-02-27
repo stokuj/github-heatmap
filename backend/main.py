@@ -3,6 +3,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 
 from backend.api.routes.heatmap import router as heatmap_router
+from backend.core.middleware import HeatmapRateLimitMiddleware
 from backend.core.observability import init_sentry
 from backend.services.heatmap_service import GitHubAPIError
 from backend.services.heatmap_service import InvalidGitHubTokenError
@@ -16,6 +17,11 @@ def create_app() -> FastAPI:
     init_sentry(app_settings)
 
     fastapi_app = FastAPI()
+    fastapi_app.add_middleware(
+        HeatmapRateLimitMiddleware,
+        requests_per_window=app_settings.rate_limit_per_minute,
+        window_seconds=app_settings.rate_limit_window_seconds,
+    )
 
     @fastapi_app.exception_handler(InvalidGitHubTokenError)
     async def invalid_token_handler(

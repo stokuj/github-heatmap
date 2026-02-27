@@ -13,5 +13,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     release: str | None = None
     sentry_traces_sample_rate: float = 0.1
+    rate_limit_per_minute: int = 30
+    rate_limit_window_seconds: int = 60
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")

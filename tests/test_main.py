@@ -1,10 +1,10 @@
 import httpx
 from fastapi.testclient import TestClient
 
-from backend.main import app
+from backend.main import main
 
 
-client = TestClient(app)
+client = TestClient(main)
 
 
 def test_read_root_returns_hello_world() -> None:
@@ -28,7 +28,7 @@ def test_health_live_returns_ok() -> None:
 def test_sentry_debug_returns_500() -> None:
     """Sentry debug endpoint raises an internal server error."""
 
-    debug_client = TestClient(app, raise_server_exceptions=False)
+    debug_client = TestClient(main, raise_server_exceptions=False)
 
     response = debug_client.get("/sentry-debug")
 
@@ -75,11 +75,11 @@ def test_get_heatmap_me_returns_weeks_for_authenticated_user(monkeypatch) -> Non
         ]
 
     monkeypatch.setattr(
-        "backend.main.fetch_authenticated_user",
+        "backend.services.heatmap_service.fetch_authenticated_user",
         fake_fetch_authenticated_user,
     )
     monkeypatch.setattr(
-        "backend.main.fetch_contribution_days",
+        "backend.services.heatmap_service.fetch_contribution_days",
         fake_fetch_contribution_days,
     )
 
@@ -114,7 +114,7 @@ def test_get_heatmap_me_maps_github_auth_error_to_401(monkeypatch) -> None:
         raise httpx.HTTPStatusError("Unauthorized", request=request, response=response)
 
     monkeypatch.setattr(
-        "backend.main.fetch_authenticated_user",
+        "backend.services.heatmap_service.fetch_authenticated_user",
         fake_fetch_authenticated_user,
     )
 

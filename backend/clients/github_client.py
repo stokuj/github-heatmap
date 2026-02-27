@@ -35,7 +35,7 @@ def fetch_authenticated_user(token: str) -> dict[str, str | int]:
 def fetch_contribution_days(
     username: str,
     token: str,
-    graphql_url: str
+    graphql_url: str,
 ) -> list[dict[str, str | int]]:
     """Fetch one-year contribution days for a user from GitHub GraphQL API."""
 

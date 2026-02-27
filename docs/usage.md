@@ -19,7 +19,7 @@ GITHUB_GRAPHQL_URL=https://api.github.com/graphql
 
 ```bash
 uv sync --dev
-uv run uvicorn backend.main:app --reload
+uv run uvicorn backend.main:main --reload
 ```
 
 Open:

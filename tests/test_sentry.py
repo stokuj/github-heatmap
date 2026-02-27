@@ -1,4 +1,4 @@
-from backend.main import init_sentry
+from backend.core.observability import init_sentry
 from backend.settings import Settings
 
 
@@ -10,7 +10,7 @@ def test_init_sentry_skips_when_dsn_missing(monkeypatch) -> None:
     def fake_init(**kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr("backend.main.sentry_sdk.init", fake_init)
+    monkeypatch.setattr("backend.core.observability.sentry_sdk.init", fake_init)
 
     settings = Settings(sentry_dsn=None)
     init_sentry(settings)
@@ -26,7 +26,7 @@ def test_init_sentry_initializes_sdk_with_settings(monkeypatch) -> None:
     def fake_init(**kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr("backend.main.sentry_sdk.init", fake_init)
+    monkeypatch.setattr("backend.core.observability.sentry_sdk.init", fake_init)
 
     settings = Settings(
         sentry_dsn="https://examplePublicKey@o0.ingest.sentry.io/0",

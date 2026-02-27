@@ -3,6 +3,8 @@ from backend.settings import Settings
 
 
 def test_init_sentry_skips_when_dsn_missing(monkeypatch) -> None:
+    """Sentry initialization is skipped when DSN is absent."""
+
     calls: list[dict[str, object]] = []
 
     def fake_init(**kwargs):
@@ -17,6 +19,8 @@ def test_init_sentry_skips_when_dsn_missing(monkeypatch) -> None:
 
 
 def test_init_sentry_initializes_sdk_with_settings(monkeypatch) -> None:
+    """Sentry SDK is initialized with configured runtime settings."""
+
     calls: list[dict[str, object]] = []
 
     def fake_init(**kwargs):

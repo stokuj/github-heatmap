@@ -18,6 +18,8 @@ settings = Settings()
 
 
 def init_sentry(app_settings: Settings) -> None:
+    """Initialize Sentry SDK when DSN is configured."""
+
     if not app_settings.sentry_dsn:
         return
 
@@ -35,6 +37,8 @@ app = FastAPI()
 
 
 def contribution_level(count: int) -> int:
+    """Map daily contribution count to a heatmap level in range 0..4."""
+
     if count <= 0:
         return 0
     if count <= 2:
@@ -47,6 +51,12 @@ def contribution_level(count: int) -> int:
 
 
 def extract_bearer_token(credentials: HTTPAuthorizationCredentials | None) -> str:
+    """Extract and validate a Bearer token from authorization credentials.
+
+    Raises:
+        HTTPException: If credentials are missing, malformed, or empty.
+    """
+
     if credentials is None:
         raise HTTPException(
             status_code=401,
@@ -62,9 +72,9 @@ def extract_bearer_token(credentials: HTTPAuthorizationCredentials | None) -> st
     return credentials.credentials.strip()
 
 
-def build_weeks_payload(
-    contribution_days: list[dict[str, str | int]],
-) -> tuple[list[dict[str, object]], int]:
+def build_weeks_payload(contribution_days: list[dict[str, str | int]],) -> tuple[list[dict[str, object]], int]:
+    """Group contribution days into week buckets and compute total count."""
+
     grouped_weeks: dict[date, list[dict[str, int | str]]] = {}
     total = 0
 
@@ -101,16 +111,22 @@ def build_weeks_payload(
 
 @app.get("/")
 async def root() -> dict[str, str]:
+    """Return a basic service greeting."""
+
     return {"message": "Hello World"}
 
 
 @app.get("/health/live")
 def health_live() -> dict[str, str]:
+    """Return liveness probe response for health checks."""
+
     return {"status": "ok"}
 
 
 @app.get("/sentry-debug")
 async def trigger_error() -> None:
+    """Trigger a test exception endpoint for Sentry verification."""
+
     division_by_zero = 1 / 0
     return division_by_zero
 
@@ -119,6 +135,8 @@ async def trigger_error() -> None:
 def get_authenticated_user_heatmap(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
 ) -> dict[str, object]:
+    """Return contribution heatmap payload for the authenticated GitHub user."""
+
     token = extract_bearer_token(credentials)
 
     try:

@@ -7,6 +7,8 @@ import httpx
 
 
 def fetch_authenticated_user(token: str) -> dict[str, str | int]:
+    """Fetch basic profile data for the token owner from GitHub REST API."""
+
     response = httpx.get(
         "https://api.github.com/user",
         headers={
@@ -33,8 +35,10 @@ def fetch_authenticated_user(token: str) -> dict[str, str | int]:
 def fetch_contribution_days(
     username: str,
     token: str,
-    graphql_url: str,
+    graphql_url: str
 ) -> list[dict[str, str | int]]:
+    """Fetch one-year contribution days for a user from GitHub GraphQL API."""
+
     if not token:
         raise ValueError("GITHUB_TOKEN is required for GraphQL requests")
 

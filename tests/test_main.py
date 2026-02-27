@@ -8,6 +8,8 @@ client = TestClient(app)
 
 
 def test_read_root_returns_hello_world() -> None:
+    """Root endpoint returns the expected hello payload."""
+
     response = client.get("/")
 
     assert response.status_code == 200
@@ -15,6 +17,8 @@ def test_read_root_returns_hello_world() -> None:
 
 
 def test_health_live_returns_ok() -> None:
+    """Liveness endpoint returns healthy status."""
+
     response = client.get("/health/live")
 
     assert response.status_code == 200
@@ -22,6 +26,8 @@ def test_health_live_returns_ok() -> None:
 
 
 def test_sentry_debug_returns_500() -> None:
+    """Sentry debug endpoint raises an internal server error."""
+
     debug_client = TestClient(app, raise_server_exceptions=False)
 
     response = debug_client.get("/sentry-debug")
@@ -30,6 +36,8 @@ def test_sentry_debug_returns_500() -> None:
 
 
 def test_get_heatmap_me_requires_bearer_token() -> None:
+    """Heatmap endpoint rejects requests without bearer token."""
+
     response = client.get("/heatmap/me")
 
     assert response.status_code == 401
@@ -37,6 +45,8 @@ def test_get_heatmap_me_requires_bearer_token() -> None:
 
 
 def test_get_heatmap_me_rejects_non_bearer_authorization() -> None:
+    """Heatmap endpoint rejects non-bearer authorization schemes."""
+
     response = client.get("/heatmap/me", headers={"Authorization": "token abc"})
 
     assert response.status_code == 401
@@ -44,6 +54,8 @@ def test_get_heatmap_me_rejects_non_bearer_authorization() -> None:
 
 
 def test_get_heatmap_me_returns_weeks_for_authenticated_user(monkeypatch) -> None:
+    """Heatmap endpoint returns grouped weekly payload for valid auth."""
+
     def fake_fetch_authenticated_user(token: str) -> dict[str, str | int]:
         assert token == "oauth-token"
         return {"id": 1, "login": "OctoCat"}
@@ -94,6 +106,8 @@ def test_get_heatmap_me_returns_weeks_for_authenticated_user(monkeypatch) -> Non
 
 
 def test_get_heatmap_me_maps_github_auth_error_to_401(monkeypatch) -> None:
+    """GitHub auth failure is translated into API 401 response."""
+
     def fake_fetch_authenticated_user(token: str) -> dict[str, str | int]:
         request = httpx.Request("GET", "https://api.github.com/user")
         response = httpx.Response(status_code=401, request=request)
@@ -114,6 +128,8 @@ def test_get_heatmap_me_maps_github_auth_error_to_401(monkeypatch) -> None:
 
 
 def test_openapi_exposes_bearer_auth_for_heatmap_me() -> None:
+    """OpenAPI schema exposes bearer security for heatmap endpoint."""
+
     response = client.get("/openapi.json")
 
     assert response.status_code == 200

@@ -3,6 +3,11 @@ from pydantic_settings import SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Application settings loaded from environment variables.
+
+    Values are read from process environment and optionally from `.env`.
+    """
+
     github_graphql_url: str = "https://api.github.com/graphql"
     sentry_dsn: str | None = None
     environment: str = "development"

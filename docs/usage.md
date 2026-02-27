@@ -12,7 +12,11 @@
 Copy `.env.example` to `.env` and adjust values if needed.
 
 ```env
+ENVIRONMENT=development
 GITHUB_GRAPHQL_URL=https://api.github.com/graphql
+SENTRY_DSN=
+RELEASE=
+SENTRY_TRACES_SAMPLE_RATE=0.1
 ```
 
 ## Local Run

@@ -1,7 +1,7 @@
 [project]
 name = "github-heatmap"
 version = "0.1.0"
-description = "Simple FastAPI hello world demo"
+description = "FastAPI service for authenticated GitHub contribution heatmap data"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
